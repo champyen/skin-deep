@@ -1,6 +1,6 @@
 CC ?= gcc
-CFLAGS = -Wall -O2
-LDFLAGS = -lm
+CFLAGS = -Wall -O2 -march=native -fopenmp
+LDFLAGS = -lm -fopenmp -lpthread
 
 all: main
 
