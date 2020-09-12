@@ -218,50 +218,45 @@ void denoise2(
 
     int *col_pow = calloc(width * sizeof(int), 1);
     int *col_val = calloc(width * sizeof(int), 1);
-    int *row_pos = malloc((width + 2*radius) * sizeof(int));
-    int *col_pos = malloc((height + 2*radius) * sizeof(int));
+    int *row_pos = malloc((height + 2*radius + 1) * sizeof(int));
+    int *col_pos = malloc((width + 2*radius + 1) * sizeof(int));
 
-    int stride = width;
+    compute_offset(row_pos+1, height, radius, radius, width);
+    compute_offset(col_pos+1, width, radius, radius, 1);
+    row_pos[0] = row_pos[2*radius+1];
+    col_pos[0] = col_pos[2*radius+1];
 
-    compute_offset(row_pos, width, radius, radius, 1);
-    compute_offset(col_pos, height, radius, radius, stride);
+    int *row_off = row_pos + radius+1;
+    int *col_off = col_pos + radius+1;
 
-    int *row_off = row_pos + radius;
-    int *col_off = col_pos + radius;
-
-    for (int x = 0; x < stride; x ++) {
+    for (int x = 0; x < width; x ++) {
         for (int z = -radius; z <= radius; z++) {
-            uint8_t sample = *(in + col_off[z] + x);
+            uint8_t sample = *(in + row_off[z] + x);
             col_val[x] += sample;
             col_pow[x] += sample * sample;
         }
     }
     for (int y = 0; y < height; y++) {
-        uint8_t *scan_in_line = in + y*stride;
-        uint8_t *scan_out_line = out + y*stride*channels;
-        if (y > 0) {
-            uint8_t *last_col = in + col_off[y - radius - 1];
-            uint8_t *next_col = in + col_off[y + radius];
-            for (int x = 0; x < stride; x++) {
-                col_val[x] -= last_col[x] - next_col[x];
-                col_pow[x] -= last_col[x]*last_col[x] - next_col[x]*next_col[x];
-            }
+        uint8_t *scan_in_line = in + y*width;
+        uint8_t *scan_out_line = out + y*width*channels;
+        for (int x = 0; x < width; x++) {
+            uint8_t *last_col = in + row_off[y - radius - 1];
+            uint8_t *next_col = in + row_off[y + radius];
+            col_val[x] -= last_col[x] - next_col[x];
+            col_pow[x] -= last_col[x]*last_col[x] - next_col[x]*next_col[x];
         }
 
         int prev_sum = 0, prev_sum_pow = 0;
         for (int z = -radius; z <= radius; z++) {
-            int index = row_off[z];
+            int index = col_off[z];
             prev_sum += col_val[index];
             prev_sum_pow += col_pow[index];
         }
-        for (int x = 0; x < width; x++) {
-            int last_row = row_off[x - radius - 1];
-            int next_row = row_off[x + radius];
-
-            if(x > 0){
-                prev_sum -= col_val[last_row] - col_val[next_row];
-                prev_sum_pow = prev_sum_pow - col_pow[last_row] + col_pow[next_row];
-            }
+        for (int x = 0; x < width; x++,scan_in_line++, scan_out_line += channels) {
+            int last_row = col_off[x - radius - 1];
+            int next_row = col_off[x + radius];
+            prev_sum -= col_val[last_row] - col_val[next_row];
+            prev_sum_pow = prev_sum_pow - col_pow[last_row] + col_pow[next_row];
 
             int pix = *scan_in_line;
             int mean = prev_sum / window_size;
@@ -271,8 +266,6 @@ void denoise2(
             int var = (prev_sum_pow - mean*prev_sum) / window_size;
             int out = masked_edge - diff*var / (var + smooth_table[pix]);
             scan_out_line[ch_idx] = CLAMP2BYTE(out);
-
-            scan_in_line++, scan_out_line += channels;
         }
     }
 

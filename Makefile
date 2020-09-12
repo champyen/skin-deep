@@ -3,7 +3,7 @@ CFLAGS = -Wall -O2
 LDFLAGS = -lm
 
 ifeq ("$(ENABLE_OPENMP)","1")
-CFLAGS += -DOPT_PLANE -march=native -fopenmp
+CFLAGS += -DOPT_PLANE -fopenmp
 LDFLAGS += -fopenmp -lpthread
 endif
 
