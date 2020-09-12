@@ -26,7 +26,11 @@
 
 #define OPT_PLANE 1
 
-unsigned int detect(uint8_t *pixel, uint8_t **plane, int width, int height, int channels)
+unsigned int detect(uint8_t *pixel,
+                    uint8_t **plane,
+                    int width,
+                    int height,
+                    int channels)
 {
     int stride = width * channels;
     int last_col = width * channels - channels;
@@ -50,9 +54,11 @@ unsigned int detect(uint8_t *pixel, uint8_t **plane, int width, int height, int 
             int b_avg = ((c00[2] + c10[2] + c01[2] + c11[2])) >> 2;
 
 #if OPT_PLANE
+            /* clang-format off */
             plane[0][y*width + x] = c00[0];
             plane[1][y*width + x] = c00[1];
             plane[2][y*width + x] = c00[2];
+            /* clang-format on */
 #endif
             /* TODO: detect appropriate RGB values */
             if (r_avg >= 60 && g_avg >= 40 && b_avg >= 20 && r_avg >= b_avg &&
@@ -194,6 +200,7 @@ void denoise(uint8_t *out,
     free(col_pos);
 }
 
+/* clang-format off */
 void denoise2(
     uint8_t *out,
     uint8_t **planes,
@@ -209,12 +216,12 @@ void denoise2(
     assert(in && out);
     assert(radius > 0);
 
-    int window_size = (2 * radius + 1) * (2 * radius + 1);
+    int window_size = (2*radius + 1) * (2*radius + 1);
 
-    int *col_pow = malloc(width * sizeof(int));
-    int *col_val = malloc(width * sizeof(int));
-    int *row_pos = malloc((width + 2 * radius) * sizeof(int));
-    int *col_pos = malloc((height + 2 * radius) * sizeof(int));
+    int *col_pow = calloc(width * sizeof(int), 1);
+    int *col_val = calloc(width * sizeof(int), 1);
+    int *row_pos = malloc((width + 2*radius) * sizeof(int));
+    int *col_pos = malloc((height + 2*radius) * sizeof(int));
 
     int stride = width;
 
@@ -225,25 +232,21 @@ void denoise2(
     int *col_off = col_pos + radius;
 
     for (int x = 0; x < stride; x ++) {
-        int col_sum = 0;
-        int col_sum_pow = 0;
         for (int z = -radius; z <= radius; z++) {
             uint8_t sample = *(in + col_off[z] + x);
-            col_sum += sample;
-            col_sum_pow += sample * sample;
+            col_val[x] += sample;
+            col_pow[x] += sample * sample;
         }
-        col_val[x] = col_sum;
-        col_pow[x] = col_sum_pow;
     }
     for (int y = 0; y < height; y++) {
-        uint8_t *scan_in_line = in + y * stride;
-        uint8_t *scan_out_line = out + y * stride * channels;
+        uint8_t *scan_in_line = in + y*stride;
+        uint8_t *scan_out_line = out + y*stride*channels;
         if (y > 0) {
             uint8_t *last_col = in + col_off[y - radius - 1];
             uint8_t *next_col = in + col_off[y + radius];
             for (int x = 0; x < stride; x++) {
                 col_val[x] -= last_col[x] - next_col[x];
-                col_pow[x] -= last_col[x] * last_col[x] - next_col[x] * next_col[x];
+                col_pow[x] -= last_col[x]*last_col[x] - next_col[x]*next_col[x];
             }
         }
 
@@ -266,9 +269,9 @@ void denoise2(
             int mean = prev_sum / window_size;
             int diff = mean - pix;
             int edge = CLAMP2BYTE(diff);
-            int masked_edge = (edge * pix + (256 - edge) * mean) >> 8;
-            int var = (prev_sum_pow - mean * prev_sum) / window_size;
-            int out = masked_edge - diff * var / (var + smooth_table[pix]);
+            int masked_edge = (edge*pix + (256 - edge)*mean) >> 8;
+            int var = (prev_sum_pow - mean*prev_sum) / window_size;
+            int out = masked_edge - diff*var / (var + smooth_table[pix]);
             scan_out_line[ch_idx] = CLAMP2BYTE(out);
 
             scan_in_line++, scan_out_line += channels;
@@ -287,24 +290,24 @@ static void die(char *msg)
     exit(-1);
 }
 
-
 inline uint64_t time_diff(struct timeval *st, struct timeval *et)
 {
     return (et->tv_sec - st->tv_sec)*1000000ULL + (et->tv_usec - st->tv_usec);
 }
+/* clang-format on */
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2){
+    if (argc < 2) {
         printf("%s -i INPUT [-o OUTPUT] [-l LEVEL]\n", argv[0]);
         return -1;
     }
 
-
     char *ifn = NULL;
     char *ofn = "out.jpg";
-    int smoothing_level = 10; /* FIXME: should be adjustable */
+    int smoothing_level = 10;
 
+    /* clang-format off */
     int opt;
     while ((opt = getopt (argc, argv, "i:l:o:")) != -1){
         switch(opt){
@@ -323,8 +326,8 @@ int main(int argc, char *argv[])
             }
         }
     }
-
     printf("ifn:%s ofn:%s level:%d\n", ifn, ofn, smoothing_level);
+    /* clang-format on */
 
     struct timeval stime, etime;
 
@@ -332,7 +335,7 @@ int main(int argc, char *argv[])
     uint8_t *in = stbi_load(ifn, &width, &height, &channels, 0);
     if (!in)
         die("Fail to load input file");
-    assert(width > 0 && height > 0 );
+    assert(width > 0 && height > 0);
     assert(channels >= 3);
 
     int dimension = width * height;
@@ -341,16 +344,18 @@ int main(int argc, char *argv[])
         die("Out of memory");
 
     uint8_t *in_planes[4] = {NULL};
-    for(int i = 0; i < channels; i++)
+    for (int i = 0; i < channels; i++)
         in_planes[i] = malloc(dimension);
 
     /* Separation between skin and non-skin pixels */
     gettimeofday(&stime, NULL);
-    float rate = detect(in, in_planes, width, height, channels) / (float) dimension * 100;
+    float rate = detect(in, in_planes, width, height, channels) /
+                 (float) dimension * 100;
     gettimeofday(&etime, NULL);
     printf("detect - %lu us\n", time_diff(&stime, &etime));
 
     /* Perform edge detection, resulting in an edge map for further denoise */
+    /* clang-format off */
     gettimeofday(&stime, NULL);
     int smooth_table[256] = {0};
     float ii = 0.f;
@@ -364,17 +369,18 @@ int main(int argc, char *argv[])
 #if OPT_PLANE
     #pragma omp parallel for
     for(int i = 0; i < channels; i++)
-        denoise2(out, in_planes, smooth_table, width, height, channels, i, min(width, height) / rate + 1);
+        denoise2(out, in_planes, smooth_table, width, height, channels, i, min(width, height)/rate + 1);
 #else
     denoise(out, in, smooth_table, width, height, channels, min(width, height) / rate + 1);
 #endif
     gettimeofday(&etime, NULL);
     printf("denoise - %lu us\n", time_diff(&stime, &etime));
+    /* clang-format on */
 
     if (!stbi_write_jpg(ofn, width, height, channels, out, 100))
         die("Fail to generate");
 
-    for(int i = 0; i < channels; i++)
+    for (int i = 0; i < channels; i++)
         free(in_planes[i]);
 
     free(out);
