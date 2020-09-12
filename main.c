@@ -223,22 +223,22 @@ void denoise2(
 
     int *row_off = row_pos + radius;
     int *col_off = col_pos + radius;
+
+    for (int x = 0; x < stride; x ++) {
+        int col_sum = 0;
+        int col_sum_pow = 0;
+        for (int z = -radius; z <= radius; z++) {
+            uint8_t sample = *(in + col_off[z] + x);
+            col_sum += sample;
+            col_sum_pow += sample * sample;
+        }
+        col_val[x] = col_sum;
+        col_pow[x] = col_sum_pow;
+    }
     for (int y = 0; y < height; y++) {
         uint8_t *scan_in_line = in + y * stride;
         uint8_t *scan_out_line = out + y * stride * channels;
-        if (y == 0) {
-            for (int x = 0; x < stride; x ++) {
-                int col_sum = 0;
-                int col_sum_pow = 0;
-                for (int z = -radius; z <= radius; z++) {
-                    uint8_t *sample = in + col_off[z] + x;
-                    col_sum += *sample;
-                    col_sum_pow += *sample * *sample;
-                }
-                col_val[x] = col_sum;
-                col_pow[x] = col_sum_pow;
-            }
-        } else {
+        if (y > 0) {
             uint8_t *last_col = in + col_off[y - radius - 1];
             uint8_t *next_col = in + col_off[y + radius];
             for (int x = 0; x < stride; x++) {
@@ -253,33 +253,22 @@ void denoise2(
             prev_sum += col_val[index];
             prev_sum_pow += col_pow[index];
         }
-
-        int mean = prev_sum / window_size;
-        int diff = mean - *scan_in_line;
-        int edge = CLAMP2BYTE(diff);
-        int masked_edge =
-            (edge * *scan_in_line + (256 - edge) * mean) >> 8;
-        int var = (prev_sum_pow - mean * prev_sum) / window_size;
-        int out = masked_edge -
-                  diff * var / (var + smooth_table[*scan_in_line]);
-        *scan_out_line = CLAMP2BYTE(out);
-
-        scan_in_line++, scan_out_line += channels;
-        for (int x = 1; x < width; x++) {
+        for (int x = 0; x < width; x++) {
             int last_row = row_off[x - radius - 1];
             int next_row = row_off[x + radius];
 
-            prev_sum -= col_val[last_row] - col_val[next_row];
-            prev_sum_pow = prev_sum_pow - col_pow[last_row] +
-                              col_pow[next_row];
+            if(x > 0){
+                prev_sum -= col_val[last_row] - col_val[next_row];
+                prev_sum_pow = prev_sum_pow - col_pow[last_row] + col_pow[next_row];
+            }
+
+            int pix = *scan_in_line;
             int mean = prev_sum / window_size;
-            int diff = mean - *scan_in_line;
+            int diff = mean - pix;
             int edge = CLAMP2BYTE(diff);
-            int masked_edge =
-                (edge * *scan_in_line + (256 - edge) * mean) >> 8;
+            int masked_edge = (edge * pix + (256 - edge) * mean) >> 8;
             int var = (prev_sum_pow - mean * prev_sum) / window_size;
-            int out = masked_edge -
-                      diff * var / (var + smooth_table[*scan_in_line]);
+            int out = masked_edge - diff * var / (var + smooth_table[pix]);
             scan_out_line[ch_idx] = CLAMP2BYTE(out);
 
             scan_in_line++, scan_out_line += channels;
@@ -361,15 +350,15 @@ int main(int argc, char *argv[])
     gettimeofday(&etime, NULL);
     printf("detect - %lu us\n", time_diff(&stime, &etime));
 
-
     /* Perform edge detection, resulting in an edge map for further denoise */
     gettimeofday(&stime, NULL);
     int smooth_table[256] = {0};
     float ii = 0.f;
     for (int i = 0; i <= 255; i++, ii -= 1.) {
-        smooth_table[i] = (expf(ii * (1.0f / (smoothing_level * 255.0f))) +
-                           (smoothing_level * (i + 1)) + 1) /
-                          2;
+        smooth_table[i] = (
+            expf(ii * (1.0f / (smoothing_level * 255.0f))) +
+            (smoothing_level * (i + 1)) + 1
+        ) / 2;
         smooth_table[i] = max(smooth_table[i], 1);
     }
 #if OPT_PLANE
