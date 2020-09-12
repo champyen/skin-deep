@@ -24,8 +24,6 @@
 
 #define CLAMP2BYTE(v) (((unsigned) (v)) < 255 ? (v) : (v < 0) ? 0 : 255)
 
-#define OPT_PLANE 1
-
 unsigned int detect(uint8_t *pixel,
                     uint8_t **plane,
                     int width,
