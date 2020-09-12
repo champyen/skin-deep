@@ -1,6 +1,12 @@
 CC ?= gcc
-CFLAGS = -Wall -O2 -march=native -fopenmp
-LDFLAGS = -lm -fopenmp -lpthread
+CFLAGS = -Wall -O2
+LDFLAGS = -lm
+
+ifeq ("$(ENABLE_OPENMP)","1")
+CFLAGS += -DENABLE_OPENMP -march=native -fopenmp
+LDFLAGS += -fopenmp -lpthread
+endif
+
 
 all: main
 
