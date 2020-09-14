@@ -447,10 +447,6 @@ int main(int argc, char *argv[])
 #if OPT_PLANE
 
 #if TILING
-    #pragma omp parallel for
-    for(int i = 0; i < channels; i++)
-        denoise2(out, in_planes, smooth_table, width, height, channels, i, min(width, height)/rate + 1);
-#else
     int radius = min(width, height)/rate + 1;
     int *row_pos = malloc((height + 2*radius + 1) * sizeof(int));
     int *col_pos = malloc((width + 2*radius + 1) * sizeof(int));
@@ -458,8 +454,6 @@ int main(int argc, char *argv[])
     compute_offset(row_pos, height, radius+1, radius+1, width);
     compute_offset(col_pos, width, radius+1, radius+1, 1);
 
-
-    printf("radius %d\n", (int)(min(width, height)/rate) + 1);
     #define TILE_W 256
     #define TILE_H 256
     for(int i = 0; i < channels; i++){
@@ -490,6 +484,10 @@ int main(int argc, char *argv[])
 
     free(row_pos);
     free(col_pos);
+#else
+    #pragma omp parallel for
+    for(int i = 0; i < channels; i++)
+        denoise2(out, in_planes, smooth_table, width, height, channels, i, min(width, height)/rate + 1);
 #endif // TILING
 
 #else
