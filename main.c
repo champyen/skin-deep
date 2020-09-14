@@ -454,16 +454,42 @@ int main(int argc, char *argv[])
     compute_offset(row_pos, height, radius+1, radius+1, width);
     compute_offset(col_pos, width, radius+1, radius+1, 1);
 
-    #define TILE_W 256
-    #define TILE_H 256
+    #define TILE_W 240
+    #define TILE_H 240
     for(int i = 0; i < channels; i++){
-        for(int _y = 0; _y <= height/TILE_H; _y++){
+        #if 1
+
+        int tx = (width + (TILE_W-1))/TILE_W;
+        int ty = (height + (TILE_H-1))/TILE_H;
+        #pragma omp parallel for
+        for(int idx = 0; idx < tx*ty; idx++){
+            int x = (idx % tx) * TILE_W;
+            int y = (idx / tx) * TILE_H;
+            if(y + TILE_H > height)
+                y = height - TILE_H;
+            if(x + TILE_W >= width)
+
+            x = width - TILE_W;
+            tile_ctx tile;
+            tile.roi_x = x;
+            tile.roi_y = y;
+            tile.roi_w = TILE_W;
+            tile.roi_h = TILE_H;
+            tile.smooth_table = smooth_table;
+            tile.row_pos = row_pos;
+            tile.col_pos = col_pos;
+
+            denoise3(out, in_planes, &tile, width, height, channels, i, min(width, height)/rate + 1);
+        }
+
+        #else
+        for(int _y = 0; _y < (height + (TILE_H-1))/TILE_H; _y++){
             int y = _y * TILE_H;
-            if(y + TILE_H >= height)
+            if(y + TILE_H > height)
                 y = height - TILE_H;
 
             #pragma omp parallel for
-            for(int _x = 0; _x <= width/TILE_W; _x++){
+            for(int _x = 0; _x < (width + (TILE_W-1))/TILE_W; _x++){
                 int x = _x * TILE_W;
                 if(x + TILE_W >= width)
                     x = width - TILE_W;
@@ -480,6 +506,7 @@ int main(int argc, char *argv[])
 
             }
         }
+        #endif
     }
 
     free(row_pos);
