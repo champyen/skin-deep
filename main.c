@@ -24,6 +24,8 @@
 
 #define CLAMP2BYTE(v) (((unsigned) (v)) < 255 ? (v) : (v < 0) ? 0 : 255)
 
+#define TILING 1
+
 unsigned int detect(uint8_t *pixel,
                     uint8_t **plane,
                     int width,
@@ -275,10 +277,89 @@ void denoise2(
     free(col_pos);
 }
 
-static void die(char *msg)
-{
-    fprintf(stderr, "Fatal: %s\n", msg);
-    exit(-1);
+typedef struct{
+    int *smooth_table;
+    int *row_pos;
+    int *col_pos;
+    int roi_x;
+    int roi_y;
+    int roi_w;
+    int roi_h;
+} tile_ctx;
+
+void denoise3(
+    uint8_t *out,
+    uint8_t **planes,
+    tile_ctx *tile,
+    int width,
+    int height,
+    int channels,
+    int ch_idx,
+    int radius
+){
+    uint8_t *in = planes[ch_idx];
+
+    assert(in && out);
+    assert(radius > 0);
+
+    int roi_x = tile->roi_x;
+    int roi_y = tile->roi_y;
+    int roi_w = tile->roi_w;
+    int roi_h = tile->roi_h;
+    int *smooth_table = tile->smooth_table;
+
+    int window_size = (2*radius + 1) * (2*radius + 1);
+
+    int *col_pow = calloc(width * sizeof(int), 1);
+    int *col_val = calloc(width * sizeof(int), 1);
+
+    int *row_off = tile->row_pos + radius+1;
+    int *col_off = tile->col_pos + radius+1;
+
+    int sx = max(0, roi_x - radius - 1);
+    int ex = min(width, roi_x + roi_w + radius);
+    for (int x = sx; x < ex; x++) {
+        for (int z = roi_y - radius - 1; z < roi_y + radius; z++) {
+            uint8_t sample = *(in + row_off[z] + x);
+            col_val[x] += sample;
+            col_pow[x] += sample * sample;
+        }
+    }
+    for (int y = roi_y; y < (roi_y+roi_h); y++) {
+        uint8_t *scan_in_line = in + y*width + roi_x;
+        uint8_t *scan_out_line = out + (y*width + roi_x)*channels;
+        for (int x = sx; x < ex; x++) {
+            uint8_t *last_col = in + row_off[y - radius - 1];
+            uint8_t *next_col = in + row_off[y + radius];
+            col_val[x] -= last_col[x] - next_col[x];
+            col_pow[x] -= last_col[x]*last_col[x] - next_col[x]*next_col[x];
+        }
+
+        int prev_sum = 0, prev_sum_pow = 0;
+        for (int z = roi_x - radius - 1; z < roi_x + radius; z++) {
+            int index = col_off[z];
+            prev_sum += col_val[index];
+            prev_sum_pow += col_pow[index];
+        }
+        for (int x = roi_x; x < (roi_x+roi_w); x++,scan_in_line++, scan_out_line += channels) {
+            int last_row = col_off[x - radius - 1];
+            int next_row = col_off[x + radius];
+            prev_sum -= col_val[last_row] - col_val[next_row];
+            prev_sum_pow -= col_pow[last_row] - col_pow[next_row];
+
+            int pix = *scan_in_line;
+            int mean = prev_sum / window_size;
+            int diff = mean - pix;
+            int edge = CLAMP2BYTE(diff);
+            int masked_edge = (edge*pix + (256 - edge)*mean) >> 8;
+            int var = (prev_sum_pow - mean*prev_sum) / window_size;
+            int out_val = masked_edge - diff*var / (var + smooth_table[pix]);
+            scan_out_line[ch_idx] = CLAMP2BYTE(out_val);
+        }
+    }
+
+    free(col_pow);
+    free(col_val);
 }
 
 inline uint64_t time_diff(struct timeval *st, struct timeval *et)
@@ -286,6 +367,12 @@ inline uint64_t time_diff(struct timeval *st, struct timeval *et)
     return (et->tv_sec - st->tv_sec)*1000000ULL + (et->tv_usec - st->tv_usec);
 }
 /* clang-format on */
+
+static void die(char *msg)
+{
+    fprintf(stderr, "Fatal: %s\n", msg);
+    exit(-1);
+}
 
 int main(int argc, char *argv[])
 {
@@ -358,9 +445,53 @@ int main(int argc, char *argv[])
         smooth_table[i] = max(smooth_table[i], 1);
     }
 #if OPT_PLANE
+
+#if TILING
     #pragma omp parallel for
     for(int i = 0; i < channels; i++)
         denoise2(out, in_planes, smooth_table, width, height, channels, i, min(width, height)/rate + 1);
+#else
+    int radius = min(width, height)/rate + 1;
+    int *row_pos = malloc((height + 2*radius + 1) * sizeof(int));
+    int *col_pos = malloc((width + 2*radius + 1) * sizeof(int));
+
+    compute_offset(row_pos, height, radius+1, radius+1, width);
+    compute_offset(col_pos, width, radius+1, radius+1, 1);
+
+
+    printf("radius %d\n", (int)(min(width, height)/rate) + 1);
+    #define TILE_W 256
+    #define TILE_H 256
+    for(int i = 0; i < channels; i++){
+        for(int _y = 0; _y <= height/TILE_H; _y++){
+            int y = _y * TILE_H;
+            if(y + TILE_H >= height)
+                y = height - TILE_H;
+
+            #pragma omp parallel for
+            for(int _x = 0; _x <= width/TILE_W; _x++){
+                int x = _x * TILE_W;
+                if(x + TILE_W >= width)
+                    x = width - TILE_W;
+                tile_ctx tile;
+                tile.roi_x = x;
+                tile.roi_y = y;
+                tile.roi_w = TILE_W;
+                tile.roi_h = TILE_H;
+                tile.smooth_table = smooth_table;
+                tile.row_pos = row_pos;
+                tile.col_pos = col_pos;
+
+                denoise3(out, in_planes, &tile, width, height, channels, i, min(width, height)/rate + 1);
+
+            }
+        }
+    }
+
+    free(row_pos);
+    free(col_pos);
+#endif // TILING
+
 #else
     denoise(out, in, smooth_table, width, height, channels, min(width, height) / rate + 1);
 #endif
