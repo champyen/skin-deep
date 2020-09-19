@@ -538,8 +538,8 @@ int main(int argc, char *argv[])
 
 #if TILING
     int radius = min(width, height)/rate + 1;
-    int *row_pos = malloc((height + 2*radius + 1) * sizeof(int));
-    int *col_pos = malloc((width + 2*radius + 1) * sizeof(int));
+    int *row_pos = malloc((height + 2*radius + 2) * sizeof(int));
+    int *col_pos = malloc((width + 2*radius + 2) * sizeof(int));
 
     compute_offset(row_pos, height, radius+1, radius+1, width);
     compute_offset(col_pos, width, radius+1, radius+1, 1);
