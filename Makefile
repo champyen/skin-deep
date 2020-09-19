@@ -1,5 +1,5 @@
-CC ?= gcc
-CFLAGS = -Wall -O3
+CC = clang
+CFLAGS = -Wall -O3 -mavx2 -mavx -msse4.2 -msse4.1 -msse4 -msse3 -mssse3 -msse2 -msse
 LDFLAGS = -lm
 
 ifeq ("$(ENABLE_OPENMP)","1")

@@ -12,6 +12,8 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#include "vec_type.h"
+
 #ifndef min
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #endif
@@ -25,6 +27,7 @@
 #define CLAMP2BYTE(v) (((unsigned) (v)) < 255 ? (v) : (v < 0) ? 0 : 255)
 
 #define TILING 1
+#define OPT_VECTOR 1
 
 unsigned int detect(uint8_t *pixel,
                     uint8_t **plane,
@@ -36,13 +39,58 @@ unsigned int detect(uint8_t *pixel,
     int last_col = width * channels - channels;
     int last_row = height * stride - stride;
 
-    unsigned int sum = 0;
+    unsigned int row_sum[16384] = {0};
+    #pragma omp parallel for
     for (int y = 0; y < height; y++) {
         int cur_row = stride * y;
         int next_row = min(cur_row + stride, last_row);
         uint8_t *next_scanline = pixel + next_row;
         uint8_t *cur_scanline = pixel + cur_row;
-        for (int x = 0; x < width; x++) {
+        int x = 0;
+#if OPT_VECTOR
+        /* clang-format off */
+        for (; x+16 < width; x += 8){
+            int cur_col = x * channels;
+            u16_16 vsrc0 = __builtin_convertvector(*(u8_16*)(cur_scanline + cur_col), u16_16);
+            u16_16 vsrc1 = __builtin_convertvector(*(u8_16*)(cur_scanline + cur_col + 16), u16_16);
+
+            u16_8 v_r_avg, v_g_avg, v_b_avg;
+            u8_8 vR, vG, vB;
+            v_r_avg  = __builtin_shufflevector(vsrc0, vsrc1, 0, 3,  6,  9, 12, 15, 18, 21);
+            v_g_avg  = __builtin_shufflevector(vsrc0, vsrc1, 1, 4,  7, 10, 13, 16, 19, 22);
+            v_b_avg  = __builtin_shufflevector(vsrc0, vsrc1, 2, 5,  8, 11, 14, 17, 20, 23);
+            vR = __builtin_convertvector(v_r_avg, u8_8);
+            vG = __builtin_convertvector(v_g_avg, u8_8);
+            vB = __builtin_convertvector(v_b_avg, u8_8);
+#if OPT_PLANE
+            *(u8_8*)(plane[0] + y*width + x)= vR;
+            *(u8_8*)(plane[1] + y*width + x)= vG;
+            *(u8_8*)(plane[2] + y*width + x)= vB;
+#endif
+            v_r_avg += __builtin_shufflevector(vsrc0, vsrc1, 3, 6,  9, 12, 15, 18, 21, 24);
+            v_g_avg += __builtin_shufflevector(vsrc0, vsrc1, 4, 7, 10, 13, 16, 19, 22, 25);
+            v_b_avg += __builtin_shufflevector(vsrc0, vsrc1, 5, 8, 11, 14, 17, 20, 23, 26);
+
+            vsrc0 = __builtin_convertvector(*(u8_16*)(next_scanline + cur_col), u16_16);
+            vsrc1 = __builtin_convertvector(*(u8_16*)(next_scanline + cur_col + 16), u16_16);
+            v_r_avg += __builtin_shufflevector(vsrc0, vsrc1, 0, 3,  6,  9, 12, 15, 18, 21);
+            v_g_avg += __builtin_shufflevector(vsrc0, vsrc1, 1, 4,  7, 10, 13, 16, 19, 22);
+            v_b_avg += __builtin_shufflevector(vsrc0, vsrc1, 2, 5,  8, 11, 14, 17, 20, 23);
+            v_r_avg += __builtin_shufflevector(vsrc0, vsrc1, 3, 6,  9, 12, 15, 18, 21, 24);
+            v_g_avg += __builtin_shufflevector(vsrc0, vsrc1, 4, 7, 10, 13, 16, 19, 22, 25);
+            v_b_avg += __builtin_shufflevector(vsrc0, vsrc1, 5, 8, 11, 14, 17, 20, 23, 26);
+            v_r_avg >>= 2;
+            v_g_avg >>= 2;
+            v_b_avg >>= 2;
+            for(int i = 0; i < 8; i++){
+                if (v_r_avg[i] >= 60 && v_g_avg[i] >= 40 && v_b_avg[i] >= 20 && v_r_avg[i] >= v_b_avg[i] && (v_r_avg[i] - v_g_avg[i]) >= 10)
+                    if (max3(v_r_avg[i], v_g_avg[i], v_b_avg[i]) - min3(v_r_avg[i], v_g_avg[i], v_b_avg[i]) >= 10)
+                        row_sum[y]++;
+            }
+        }
+        /* clang-format on */
+#endif
+        for (; x < width; x++) {
             int cur_col = x * channels;
             int next_col = min(cur_col + channels, last_col);
             uint8_t *c00 = cur_scanline + cur_col;
@@ -64,9 +112,13 @@ unsigned int detect(uint8_t *pixel,
             if (r_avg >= 60 && g_avg >= 40 && b_avg >= 20 && r_avg >= b_avg &&
                 (r_avg - g_avg) >= 10)
                 if (max3(r_avg, g_avg, b_avg) - min3(r_avg, g_avg, b_avg) >= 10)
-                    sum++;
+                    row_sum[y]++;
         }
     }
+
+    unsigned int sum = 0;
+    for(int y = 0; y < height; y++)
+        sum += row_sum[y];
     return sum;
 }
 
@@ -341,20 +393,58 @@ void denoise3(
             prev_sum += col_val[index];
             prev_sum_pow += col_pow[index];
         }
-        for (int x = roi_x; x < (roi_x+roi_w); x++,scan_in_line++, scan_out_line += channels) {
-            int last_row = col_off[x - radius - 1];
-            int next_row = col_off[x + radius];
-            prev_sum -= col_val[last_row] - col_val[next_row];
-            prev_sum_pow -= col_pow[last_row] - col_pow[next_row];
+#if OPT_VECTOR
+        if(roi_x > 0 && (roi_x + roi_w + radius) < width){
+            for (int x = roi_x; x < (roi_x+roi_w); x+=16,scan_in_line+=16, scan_out_line += channels*16) {
+                int last_col = x - radius - 1;
+                int next_col = x + radius;
+                s32_16 vcol_val_last = *(s32_16*)(col_val + last_col);
+                s32_16 vcol_val_next = *(s32_16*)(col_val + next_col);
+                s32_16 vprev_sum = vcol_val_last - vcol_val_next;
+                s32_16 vcol_pow_last = *(s32_16*)(col_pow + last_col);
+                s32_16 vcol_pow_next = *(s32_16*)(col_pow + next_col);
+                s32_16 vprev_sum_pow = vcol_pow_last - vcol_pow_next;
+                for(int i = 1; i < 16; i++){
+                    vprev_sum[i] += vprev_sum[i-1];
+                    vprev_sum_pow[i] += vprev_sum_pow[i-1];
+                }
+                vprev_sum = prev_sum - vprev_sum;
+                vprev_sum_pow = prev_sum_pow - vprev_sum_pow;
+                s32_16 vpix = __builtin_convertvector(*(u8_16*)(scan_in_line), s32_16);
+                s32_16 vmean = vprev_sum / window_size;
+                s32_16 vdiff = vmean - vpix;
+                s32_16 vedge = vdiff > 255 ? 255 : (vdiff < 0 ? 0 : vdiff);
+                s32_16 vmasked_edge = (vedge*vpix + (256 - vedge)*vmean) >> 8;
+                s32_16 vvar = (vprev_sum_pow - vmean*vprev_sum) / window_size;
+                s32_16 vsmooth;
+                for(int i = 0; i < 16; i++)
+                    vsmooth[i] = smooth_table[vpix[i]];
+                s32_16 vout_val = vmasked_edge - vdiff*vvar / (vvar + vsmooth);
+                vout_val = vout_val > 255 ? 255 : (vout_val < 0 ? 0 : vout_val);
+                for(int i = 0; i < 16; i++)
+                    *(scan_out_line + i*channels + ch_idx) = vout_val[i];
+                prev_sum = vprev_sum[15];
+                prev_sum_pow = vprev_sum_pow[15];
+            }
+        }
+        else
+#endif
+        {
+            for (int x = roi_x; x < (roi_x+roi_w); x++,scan_in_line++, scan_out_line += channels) {
+                int last_col = col_off[x - radius - 1];
+                int next_col = col_off[x + radius];
+                prev_sum -= col_val[last_col] - col_val[next_col];
+                prev_sum_pow -= col_pow[last_col] - col_pow[next_col];
 
-            int pix = *scan_in_line;
-            int mean = prev_sum / window_size;
-            int diff = mean - pix;
-            int edge = CLAMP2BYTE(diff);
-            int masked_edge = (edge*pix + (256 - edge)*mean) >> 8;
-            int var = (prev_sum_pow - mean*prev_sum) / window_size;
-            int out_val = masked_edge - diff*var / (var + smooth_table[pix]);
-            scan_out_line[ch_idx] = CLAMP2BYTE(out_val);
+                int pix = *scan_in_line;
+                int mean = prev_sum / window_size;
+                int diff = mean - pix;
+                int edge = CLAMP2BYTE(diff);
+                int masked_edge = (edge*pix + (256 - edge)*mean) >> 8;
+                int var = (prev_sum_pow - mean*prev_sum) / window_size;
+                int out_val = masked_edge - diff*var / (var + smooth_table[pix]);
+                scan_out_line[ch_idx] = CLAMP2BYTE(out_val);
+            }
         }
     }
 
