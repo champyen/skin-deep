@@ -370,21 +370,47 @@ void denoise3(
 
     int sx = max(0, roi_x - radius - 1);
     int ex = min(width, roi_x + roi_w + radius);
-    for (int x = sx; x < ex; x++) {
-        for (int z = roi_y - radius - 1; z < roi_y + radius; z++) {
-            uint8_t sample = *(in + row_off[z] + x);
-            col_val[x] += sample;
-            col_pow[x] += sample * sample;
+
+#if OPT_VECTOR
+    if(roi_x > 0 && (roi_x + roi_w + radius) < width){
+        for (int x = sx; x < ex; x+=16) {
+            for (int z = roi_y - radius - 1; z < roi_y + radius; z++) {
+                s32_16 vsample = __builtin_convertvector(*(u8_16*)(in + row_off[z] + x), s32_16);
+                *(s32_16*)(col_val + x) += vsample;
+                *(s32_16*)(col_pow + x) += vsample*vsample;
+            }
+        }
+    }else
+#endif
+    {
+        for (int x = sx; x < ex; x++) {
+            for (int z = roi_y - radius - 1; z < roi_y + radius; z++) {
+                uint8_t sample = *(in + row_off[z] + x);
+                col_val[x] += sample;
+                col_pow[x] += sample * sample;
+            }
         }
     }
     for (int y = roi_y; y < (roi_y+roi_h); y++) {
         uint8_t *scan_in_line = in + y*width + roi_x;
         uint8_t *scan_out_line = out + (y*width + roi_x)*channels;
-        for (int x = sx; x < ex; x++) {
-            uint8_t *last_col = in + row_off[y - radius - 1];
-            uint8_t *next_col = in + row_off[y + radius];
-            col_val[x] -= last_col[x] - next_col[x];
-            col_pow[x] -= last_col[x]*last_col[x] - next_col[x]*next_col[x];
+#if OPT_VECTOR
+        if(roi_x > 0 && (roi_x + roi_w + radius) < width){
+            for (int x = sx; x < ex; x+=16) {
+                s32_16 vlast_row = __builtin_convertvector(*(u8_16*)(in + row_off[y - radius - 1] + x), s32_16);
+                s32_16 vnext_row = __builtin_convertvector(*(u8_16*)(in + row_off[y + radius] + x), s32_16);
+                *(s32_16*)(col_val + x) -= vlast_row - vnext_row;
+                *(s32_16*)(col_pow + x) -= vlast_row*vlast_row - vnext_row*vnext_row;
+            }
+        }else
+#endif
+        {
+            for (int x = sx; x < ex; x++) {
+                uint8_t *last_row = in + row_off[y - radius - 1];
+                uint8_t *next_row = in + row_off[y + radius];
+                col_val[x] -= last_row[x] - next_row[x];
+                col_pow[x] -= last_row[x]*last_row[x] - next_row[x]*next_row[x];
+            }
         }
 
         int prev_sum = 0, prev_sum_pow = 0;
